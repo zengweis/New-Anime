@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>HEVC MP4 原生播放测试</title>
+</head>
+<body>
+<h3>HEVC MP4 原生播放测试</h3>
+<pre id="status">初始化中...</pre>
+<video id="v" controls playsinline preload="auto" width="640"></video>
+<script>
+const log = (s) => {
+  const el = document.getElementById('status');
+  el.textContent += '\n' + s;
+};
+const codes = ['hvc1.2.4.L123.B0', 'hev1.2.4.L123.B0', 'hvc1.1.6.L120.90', 'hev1.1.6.L120.90'];
+const v = document.createElement('video');
+for (const c of codes) {
+  log('canPlayType video/mp4 "' + c + '" => ' + JSON.stringify(v.canPlayType('video/mp4; codecs="' + c + '"')));
+}
+log('canPlayType audio/mp4 "mp4a.40.2" => ' + JSON.stringify(v.canPlayType('audio/mp4; codecs="mp4a.40.2"')));
+
+const video = document.getElementById('v');
+video.src = '/remux_test.mp4';
+video.addEventListener('loadedmetadata', () => log('EVENT loadedmetadata dur=' + video.duration.toFixed(2) + 's'));
+video.addEventListener('canplay', () => log('EVENT canplay'));
+video.addEventListener('playing', () => log('EVENT playing t=' + video.currentTime.toFixed(2)));
+video.addEventListener('waiting', () => log('EVENT waiting t=' + video.currentTime.toFixed(2)));
+video.addEventListener('stalled', () => log('EVENT stalled t=' + video.currentTime.toFixed(2)));
+video.addEventListener('ended', () => log('EVENT ended'));
+video.addEventListener('error', () => {
+  const e = video.error;
+  log('EVENT error code=' + (e && e.code) + ' msg=' + (e && e.message));
+});
+let n = 0;
+video.addEventListener('timeupdate', () => {
+  if (++n % 30 === 0) log('timeupdate t=' + video.currentTime.toFixed(2));
+});
+video.play().catch(e => log('play() rejected: ' + e.message));
+setTimeout(() => {
+  log('FINAL readyState=' + video.readyState + ' currentTime=' + video.currentTime.toFixed(2) + ' paused=' + video.paused);
+}, 8000);
+</script>
+</body>
+</html>

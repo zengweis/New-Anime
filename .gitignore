@@ -1,0 +1,15 @@
+# 运行时与密钥（绝不进仓库）
+backend/config/config.php
+backend/storage/
+*.log
+
+# 依赖与构建产物
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+
+# 系统垃圾
+.DS_Store
+Thumbs.db

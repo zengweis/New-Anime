@@ -1,0 +1,20 @@
+[Unit]
+Description=Anime New background daemon (RSS fetch / qB sync / mail queue)
+Documentation=https://github.com/
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/anime-new/backend
+ExecStart=/usr/bin/php /opt/anime-new/backend/bin/daemon.php
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/anime-new/backend/storage/logs/daemon.log
+StandardError=append:/opt/anime-new/backend/storage/logs/daemon.log
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>原生 MP4 播放 + 音频连续性测试</title>
+</head>
+<body>
+<h3>原生 MP4 (hvc1 HEVC) 播放 + 音频间隙检测</h3>
+<pre id="status">初始化中...</pre>
+<video id="v" controls playsinline preload="auto" width="640"></video>
+<script>
+const log = (s) => {
+  const el = document.getElementById('status');
+  el.textContent += '\n' + s;
+  window.__log = (window.__log || '') + '\n' + s;
+};
+const v = document.createElement('video');
+log('canPlayType hvc1 => ' + JSON.stringify(v.canPlayType('video/mp4; codecs="hvc1.2.4.L123.B0"')));
+log('canPlayType mp4a => ' + JSON.stringify(v.canPlayType('audio/mp4; codecs="mp4a.40.2"')));
+
+const video = document.getElementById('v');
+let gaps = [];
+let silenceStart = -1;
+
+// 登录拿 token，然后播 /stream/25
+(async () => {
+  log('登录中...');
+  const r = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account: 'zeng', password: '<password>' })
+  });
+  const j = await r.json();
+  const token = j?.data?.token;
+  if (!token) { log('登录失败: ' + JSON.stringify(j)); return; }
+  log('登录成功，token=' + token.slice(0, 16) + '...');
+
+  video.src = '/stream/25?token=' + encodeURIComponent(token);
+
+  // 音频监控
+  const ctx = new AudioContext();
+  const src = ctx.createMediaElementSource(video);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  src.connect(analyser);
+  analyser.connect(ctx.destination);
+  ctx.resume();
+  const dataArr = new Uint8Array(analyser.frequencyBinCount);
+  setInterval(() => {
+    analyser.getByteTimeDomainData(dataArr);
+    let sum = 0;
+    for (let i = 0; i < dataArr.length; i++) { const x = (dataArr[i] - 128) / 128; sum += x * x; }
+    const rms = Math.sqrt(sum / dataArr.length);
+    const t = video.currentTime;
+    if (rms < 0.01 && !video.paused && !video.ended) {
+      if (silenceStart < 0) silenceStart = t;
+    } else {
+      if (silenceStart >= 0 && t - silenceStart > 0.15) {
+        gaps.push({ start: silenceStart.toFixed(2), dur: (t - silenceStart).toFixed(2) });
+        log('>>> AUDIO GAP ' + silenceStart.toFixed(2) + 's ~ ' + (t - silenceStart).toFixed(2) + 's');
+      }
+      silenceStart = -1;
+    }
+    window.__gaps = gaps;
+  }, 100);
+
+  video.addEventListener('loadedmetadata', () => log('EVENT loadedmetadata dur=' + video.duration.toFixed(2)));
+  video.addEventListener('canplay', () => log('EVENT canplay'));
+  video.addEventListener('playing', () => log('EVENT playing t=' + video.currentTime.toFixed(2)));
+  video.addEventListener('waiting', () => log('EVENT waiting t=' + video.currentTime.toFixed(2)));
+  video.addEventListener('error', () => log('EVENT error code=' + video.error?.code + ' ' + video.error?.message));
+  video.play().catch(e => log('play rejected: ' + e.message));
+
+  // 30 秒后总结
+  setTimeout(() => {
+    log('===== 总结: 播放 30s，检测到 ' + gaps.length + ' 处音频间隙，currentTime=' + video.currentTime.toFixed(2) + 's =====');
+    window.__done = true;
+  }, 30000);
+})();
+</script>
+</body>
+</html>
