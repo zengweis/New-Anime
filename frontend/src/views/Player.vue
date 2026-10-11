@@ -795,7 +795,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div v-if="dmCfgOpen" class="dm-cfg mt-10">
+          <div v-if="dmCfgOpen" class="dm-cfg mt-8">
             <div class="dm-rng">
               <label class="label">不透明度 {{ Math.round(dmOpacity * 100) }}%</label>
               <input v-model.number="dmOpacity" type="range" min="0.2" max="1" step="0.05" />
@@ -819,14 +819,14 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div v-if="dmErr" class="alert alert-warn mt-10">{{ dmErr }}</div>
+          <div v-if="dmErr" class="alert alert-warn mt-8">{{ dmErr }}</div>
 
-          <div v-if="stage" class="row-gap mt-14 tiny muted-3">
+          <div v-if="stage" class="row-gap mt-10 tiny muted-3">
             <span class="spin spin-sm"></span>
             <span>{{ stage }}</span>
           </div>
 
-          <div v-if="pipelineLabel || ep.remuxed || serverTracks.length" class="row-gap mt-10" style="flex-wrap: wrap; gap: 8px">
+          <div v-if="pipelineLabel || ep.remuxed || serverTracks.length" class="row-gap mt-8" style="flex-wrap: wrap; gap: 10px">
             <span v-if="pipelineLabel" class="tag">{{ pipelineLabel }}</span>
             <span v-if="pipeline && pipeline.segments" class="tag">{{ pipeline.segments }} 段</span>
             <span v-if="ep.remuxed" class="tag tag-brand">原生 MP4</span>
@@ -834,11 +834,14 @@ onBeforeUnmount(() => {
             <span v-if="plan && plan.audio_remux" class="tag tag-warn">音频需前端转码</span>
           </div>
 
-          <div v-if="hint" class="alert alert-warn mt-14">{{ hint }}</div>
-          <div v-if="errMsg" class="alert alert-err mt-14">{{ errMsg }}</div>
-          <div v-if="subNote" class="alert alert-warn mt-14">{{ subNote }}</div>
+          <!-- 三类提示挤一起时不再各留 14px，收成一列、行距 8px -->
+          <div v-if="hint || errMsg || subNote" class="alerts mt-14">
+            <div v-if="hint" class="alert alert-warn">{{ hint }}</div>
+            <div v-if="errMsg" class="alert alert-err">{{ errMsg }}</div>
+            <div v-if="subNote" class="alert alert-warn">{{ subNote }}</div>
+          </div>
 
-          <div v-if="tracks.length > 1 || imageTracks.length" class="row-gap mt-14" style="gap: 8px; flex-wrap: wrap">
+          <div v-if="tracks.length > 1 || imageTracks.length" class="row-gap mt-14" style="gap: 10px; flex-wrap: wrap">
             <span class="tiny muted-3">字幕</span>
             <button
               v-for="t in tracks"
@@ -951,7 +954,7 @@ onBeforeUnmount(() => {
 .dm-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -962,17 +965,31 @@ onBeforeUnmount(() => {
   font-size: 13px;
   cursor: pointer;
   user-select: none;
+  white-space: nowrap;
 }
 
+/*
+ * 全站 .input 默认高 36px、.btn-sm 高 28px —— 直接并排会错开 8px，
+ * 输入框看起来比按钮"浮"一截。这里强制压到 28px，行内严格对齐。
+ */
 .dm-input {
-  flex: 1 1 200px;
-  min-width: 160px;
-  max-width: 460px;
+  flex: 1 1 220px;
+  min-width: 180px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+/* 提示信息：一列排、行距统一 8px，避免三条各带 14px 外距叠成大空白 */
+.alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .dm-cfg {
   display: flex;
-  gap: 18px;
+  gap: 16px;
   flex-wrap: wrap;
   align-items: flex-start;
 }

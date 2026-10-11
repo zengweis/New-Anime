@@ -18,6 +18,7 @@ use App\Service\Qbittorrent;
 use App\Service\RemuxService;
 use App\Service\S3TaskLog;
 use App\Service\S3Uploader;
+use App\Service\SubtitleService;
 use App\Service\SyncService;
 use App\Service\TitleParser;
 
@@ -47,11 +48,19 @@ final class AdminController
             $qbInfo = ['online' => false, 'error' => $e->getMessage()];
         }
 
+        // 占用空间分成两个口径：
+        //   - 本机：真扫盘得到（download_root 里的视频 + remux 产物 + 字幕缓存），
+        //           不含已上传后删除的集（那些本地确实不占空间）。
+        //   - 远程：episode 里已上传对象的 s3_size 之和（R2/S3 侧实际占用）。
+        // 历史遗留：老字段 `size` 是 SUM(file_size)，把远程文件也算进本地，
+        // 会造成「本地占 10GB」的错觉（实际文件早已删除），故保留但不推荐前端使用。
+        $storage = $this->storageInfo();
+
         Response::ok([
             'stats' => [
                 'anime'       => (int) Database::val('SELECT COUNT(*) FROM `anime`'),
                 'episode'     => (int) Database::val('SELECT COUNT(*) FROM `episode`'),
-                'size'        => (int) Database::val('SELECT COALESCE(SUM(`file_size`),0) FROM `episode`'),
+                'size'        => $storage['total'], // 兼容旧前端：改为二者之和
                 'users'       => (int) Database::val('SELECT COUNT(*) FROM `user`'),
                 'users_pend'  => (int) Database::val('SELECT COUNT(*) FROM `user` WHERE `status` IN (0,2)'),
                 'items_todo'  => (int) Database::val('SELECT COUNT(*) FROM `rss_item` WHERE `status` = 0'),
@@ -59,6 +68,7 @@ final class AdminController
                 'rules'       => (int) Database::val('SELECT COUNT(*) FROM `match_rule` WHERE `enabled` = 1'),
                 'mail_todo'   => (int) Database::val('SELECT COUNT(*) FROM `mail_queue` WHERE `status` = 0'),
             ],
+            'storage' => $storage,
             'qb'    => $qbInfo,
             'jobs'  => Database::all(
                 'SELECT `job`,`ok`,`new_count`,`message`,`cost_ms`,`created_at`
@@ -1410,5 +1420,191 @@ final class AdminController
             'readable'  => is_readable($root) && is_executable($root),
             'writable'  => is_writable($root),
         ];
+    }
+
+    // ==================================================================
+    //  存储占用（本机 / 远程）
+    // ==================================================================
+
+    /**
+     * 存储占用拆成两个口径，互不重叠：
+     *
+     *   本机（local）——真扫盘，不含数据库里的历史字节数：
+     *       video  下载根目录里真实存在的视频（remux 产物 + 未删的原片）
+     *       subs   subtitle_root 下的字幕缓存（VTT / 位图 WebP）
+     *       other  下载根目录内的其余文件（.part / .lock / 未完成碎片）
+     *
+     *   远程（remote）——已上传对象的字节数之和：
+     *       bytes     SUM(s3_size) WHERE s3_status = 1
+     *       objects   条数
+     *
+     * 之所以真扫盘而不是 SUM(file_size)：上传到 S3 后本地文件会被删除，
+     * 但 file_path / file_size 仍留着（清空会让 RemuxService 反复排队），
+     * 于是 SUM(file_size) 会把「早就删掉、只存在云上」的字节算进本机占用。
+     *
+     * 扫盘按 mtime 缓存 60 秒（RSS 列表页一次请求要对几万文件 stat 太亏），
+     * 缓存文件放在系统临时目录，不依赖 storage 可写。
+     */
+    private function storageInfo(): array
+    {
+        $local = $this->localUsage();
+        $remote = $this->remoteUsage();
+
+        return [
+            'local' => [
+                'bytes'  => $local['bytes'],
+                'video'  => $local['video'],
+                'subs'   => $local['subs'],
+                'other'  => $local['other'],
+                'count'  => $local['count'],
+                'roots'  => $local['roots'],
+                'cached' => $local['cached'],
+            ],
+            'remote' => [
+                'bytes'    => $remote['bytes'],
+                'objects'  => $remote['objects'],
+                'enabled'  => S3::enabled(),
+                'prefix'   => S3::prefix(),
+                'public_base' => S3::publicBase(),
+            ],
+            'total' => $local['bytes'] + $remote['bytes'],
+        ];
+    }
+
+    /** 远程对象占用：只统计上传成功且 s3_size 有效的行 */
+    private function remoteUsage(): array
+    {
+        $row = Database::one(
+            'SELECT COUNT(*) AS `objects`, COALESCE(SUM(`s3_size`),0) AS `bytes`
+             FROM `episode` WHERE `s3_status` = 1 AND `s3_key` IS NOT NULL AND `s3_key` <> \'\''
+        ) ?? [];
+
+        return [
+            'objects' => (int) ($row['objects'] ?? 0),
+            'bytes'   => (int) ($row['bytes'] ?? 0),
+        ];
+    }
+
+    /**
+     * 本机占用：真扫两个根目录。结果缓存 60 秒。
+     *
+     * 跳过 0 字节文件与锁文件（qB 在跑时 .part 会不断变化，统计它意义不大）。
+     */
+    private function localUsage(): array
+    {
+        $downloadRoot = (string) Setting::get('download_root', '/data/downloads/anime');
+        $subsRoot     = SubtitleService::root();
+
+        $cacheFile = rtrim(sys_get_temp_dir(), '/\\') . '/anime-storage-usage.json';
+        $cached = false;
+        $data = null;
+
+        if (is_file($cacheFile) && (time() - (int) @filemtime($cacheFile)) < 60) {
+            $raw = @file_get_contents($cacheFile);
+            if ($raw !== false) {
+                $decoded = json_decode($raw, true);
+                // 缓存里记着当时的根目录，目录改了就不能复用
+                if (is_array($decoded)
+                    && ($decoded['download_root'] ?? '') === $downloadRoot
+                    && ($decoded['subs_root'] ?? '') === $subsRoot
+                ) {
+                    $data = $decoded;
+                    $cached = true;
+                }
+            }
+        }
+
+        if ($data === null) {
+            $video = $this->dirUsage($downloadRoot, ['video']);
+            $subs  = $this->dirUsage($subsRoot, ['subs']);
+
+            $data = [
+                'download_root' => $downloadRoot,
+                'subs_root'     => $subsRoot,
+                'bytes'   => $video['bytes'] + $subs['bytes'],
+                'video'   => $video['bytes'],
+                'subs'    => $subs['bytes'],
+                'other'   => $video['other'],
+                'count'   => $video['count'] + $subs['count'],
+                'roots'   => [
+                    'download' => $downloadRoot,
+                    'subtitle' => $subsRoot,
+                ],
+                'at' => time(),
+            ];
+
+            // 扫盘结果落缓存；目录不可写也不会让接口 500
+            @file_put_contents($cacheFile, json_encode($data, JSON_UNESCAPED_SLASHES), LOCK_EX);
+        }
+
+        $data['cached'] = $cached;
+        return $data;
+    }
+
+    /**
+     * 递归统计一个目录：返回总字节数与文件数。
+     *
+     * `$bucket` 决定把体积记到哪个分类（video / subs），另一类记为 other，
+     * 用于把「remux 产物残留的 .tmp 碎片」这类非成片文件单独拎出来。
+     *
+     * @param array<int,string> $videoBucket 归入 video 的分类名（仅对视频根目录有意义）
+     * @return array{bytes:int,count:int,other:int}
+     */
+    private function dirUsage(string $dir, array $videoBucket = []): array
+    {
+        $bytes = 0;
+        $count = 0;
+        $other = 0;
+
+        if ($dir === '' || !is_dir($dir)) {
+            return ['bytes' => 0, 'count' => 0, 'other' => 0];
+        }
+
+        // 下载根目录下已知的非视频子目录（按名字跳过统计到 video 里）
+        $isVideoRoot = in_array('video', $videoBucket, true);
+
+        $it = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::CURRENT_AS_FILEINFO),
+            \RecursiveIteratorIterator::LEAVES_ONLY
+        );
+
+        foreach ($it as $file) {
+            /** @var \SplFileInfo $file */
+            try {
+                if (!$file->isFile() || $file->isLink()) {
+                    continue;
+                }
+            } catch (\Throwable $e) {
+                continue;
+            }
+
+            $name = $file->getFilename();
+            // 锁文件、qB 的半成品不算占用（前者恒为 0 字节，后者还在长）
+            if (str_starts_with($name, '.') && str_ends_with($name, '.lock')) {
+                continue;
+            }
+
+            $size = @$file->getSize();
+            if ($size === false || $size <= 0) {
+                continue;
+            }
+
+            $bytes += $size;
+            $count++;
+
+            if ($isVideoRoot) {
+                // remux 产物都在 {download_root}/remux/ 下，属于成片
+                $path = str_replace('\\', '/', $file->getPathname());
+                $isRemux = str_contains($path, '/remux/');
+                $ext = strtolower($file->getExtension());
+                if ($ext === 'mp4' || $ext === 'mkv' || $ext === 'avi' || $ext === 'ts' || $isRemux) {
+                    // 归 video
+                } else {
+                    $other += $size;
+                }
+            }
+        }
+
+        return ['bytes' => $bytes, 'count' => $count, 'other' => $other];
     }
 }

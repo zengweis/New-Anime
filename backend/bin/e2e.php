@@ -150,6 +150,11 @@ expect('篡改签名 token',     'GET',  '/api/admin/overview', 401, 401, [], $a
 section('管理员接口（读）');
 ok('auth/me',        'GET', '/api/auth/me', [], $adminToken, fn($d) => (int) ($d['id'] ?? 0) === $uid);
 ok('admin/overview', 'GET', '/api/admin/overview', [], $adminToken, fn($d) => isset($d['disk']));
+// 存储必须区分本机 / 远程两个口径，且本机是真扫盘得到的字节数
+ok('overview/storage', 'GET', '/api/admin/overview', [], $adminToken, fn($d) =>
+    isset($d['storage']['local']['bytes'], $d['storage']['remote']['bytes'], $d['storage']['total'])
+    && $d['storage']['total'] === $d['storage']['local']['bytes'] + $d['storage']['remote']['bytes']
+    && $d['storage']['local']['bytes'] >= $d['storage']['local']['video'] + $d['storage']['local']['subs']);
 ok('admin/logs',     'GET', '/api/admin/logs', [], $adminToken);
 ok('admin/animes',   'GET', '/api/admin/animes?per_page=5', [], $adminToken, fn($d) => isset($d['total']));
 ok('admin/rules',    'GET', '/api/admin/rules', [], $adminToken, fn($d) => isset($d['list']));
