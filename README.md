@@ -27,5 +27,5 @@ https://www.acgn.help
 ## 恢复
 
 - 前端：`cd frontend && npm install && npm run build`
-- 后端：无 composer 依赖，PHP 8.5 + 扩展（pdo_mysql / curl / mbstring）直接跑
+- 后端：无 composer 依赖，PHP 8.5 + 扩展（pdo_mysql / curl / mbstring）
 - 数据库：`backend/migrations/schema.sql` 建库，或逐条跑 `migrations/*.sql`
